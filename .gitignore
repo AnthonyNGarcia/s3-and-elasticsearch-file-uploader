@@ -1,0 +1,5 @@
+upload_parameters.json
+read_command.sh
+delete_s3_object.py
+delete_elastic_search_index.py
+sample-file/*.json

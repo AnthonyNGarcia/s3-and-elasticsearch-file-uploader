@@ -1,0 +1,16 @@
+{
+    "script_logging": {
+        "silence_script_progression_logs": false,
+        "silence_missing_optional_metadata_warning": false
+    },
+    "s3": {
+        "bucket_name": ""
+    },
+    "elastic_search": {
+        "endpoint": "",
+        "region": "",
+        "master_user": "",
+        "master_user_password": "",
+        "index": "stories"
+    }
+}
