@@ -358,6 +358,8 @@ def process_and_upload_txt_story(story_file_name):
 provided_file_path = sys.argv[1]
 provided_file_path_is_folder = os.path.isdir(provided_file_path)
 if provided_file_path_is_folder:
+    if not provided_file_path.endswith("\\"):
+        provided_file_path += "\\"
     for file_name in glob.iglob(provided_file_path + '**/*.txt', recursive=True):
         process_and_upload_txt_story(file_name)
 else:
