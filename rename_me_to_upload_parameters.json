@@ -1,7 +1,9 @@
 {
-    "script_logging": {
+    "script": {
         "silence_script_progression_logs": false,
-        "silence_missing_optional_metadata_warning": false
+        "silence_missing_optional_metadata_warning": false,
+        "silence_error_logs": false,
+        "overwrite_results_file": false
     },
     "s3": {
         "bucket_name": ""

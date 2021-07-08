@@ -48,12 +48,14 @@ def validate_expected_upload_parameters_were_provided(all_expected_parameters, p
             validate_expected_upload_parameters_were_provided(nested_expected_parameter_data, expected_parameter)
 
 expected_upload_parameters = {
-    "script_logging": {
+    "script": {
         "is_required": False,
         "was_found": False,
         "nested_parameters": {
             "silence_script_progression_logs": {"is_required": False, "was_found": False},
-            "silence_missing_optional_metadata_warning": {"is_required": False, "was_found": False}
+            "silence_missing_optional_metadata_warning": {"is_required": False, "was_found": False},
+            "silence_error_logs": {"is_required": False, "was_found": False},
+            "overwrite_results_file": {"is_required": False, "was_found": False}
         }
     },
     "s3": {
@@ -193,15 +195,22 @@ transformers_for_expected_story_metadata = {
     "Kudos": {
         "transformer": transform_number_value,
         "is_required": False,
+    },
+    "ReadCount": {
+        "transformer": transform_number_value,
+        "is_required": False,
     }
 }
 
 silence_script_progression_logs = False
 silence_missing_optional_metadata_warning = False
-if "script_logging" in upload_parameters and upload_parameters["script_logging"] and "silence_script_progression_logs" in upload_parameters["script_logging"]:
-    silence_script_progression_logs = upload_parameters["script_logging"]["silence_script_progression_logs"]
-if "script_logging" in upload_parameters and upload_parameters["script_logging"] and "silence_missing_optional_metadata_warning" in upload_parameters["script_logging"]:
-    silence_missing_optional_metadata_warning = upload_parameters["script_logging"]["silence_missing_optional_metadata_warning"]
+silence_error_logs = False
+if "script" in upload_parameters and upload_parameters["script"] and "silence_script_progression_logs" in upload_parameters["script"]:
+    silence_script_progression_logs = upload_parameters["script"]["silence_script_progression_logs"]
+if "script" in upload_parameters and upload_parameters["script"] and "silence_missing_optional_metadata_warning" in upload_parameters["script"]:
+    silence_missing_optional_metadata_warning = upload_parameters["script"]["silence_missing_optional_metadata_warning"]
+if "script" in upload_parameters and upload_parameters["script"] and "silence_error_logs" in upload_parameters["script"]:
+    silence_error_logs = upload_parameters["script"]["silence_error_logs"]
 
 s3 = boto3.client('s3')
 s3_upload_parameters = upload_parameters["s3"]
@@ -238,8 +247,7 @@ def process_txt_story_metadata(story_file_name):
     with open(story_file_name, "r") as file_to_transform, open(json_metadata_file_name, "w") as json_metadata_file:
         json_metadata_file.write('{')
         remaining_data_to_collect = transformers_for_expected_story_metadata.copy()
-        while remaining_data_to_collect:
-            raw_line = file_to_transform.readline()
+        for raw_line in file_to_transform.readlines():
             if raw_line == "\n":
                 continue
             else:
@@ -254,7 +262,6 @@ def process_txt_story_metadata(story_file_name):
                     transformed_line = transformer(line)
                     json_metadata_file.write(transformed_line)
                     remaining_data_to_collect.pop("Author")
-                    continue
                 elif len(line.split(":")) >= 2:
                     raw_field = line.split(":")[0]
                     transformed_field = transform_field(raw_field)
@@ -268,25 +275,29 @@ def process_txt_story_metadata(story_file_name):
                         if not silence_script_progression_logs:
                             print("Awesome Possum! Found all the required AND optional story metadata! :)")
                         break
-                else:
-                    if required_metadata_was_collected(remaining_data_to_collect):
-                        if not silence_missing_optional_metadata_warning:
-                            print("Warning: Although all the Required metadata was found, some Optional metadata was missing, indicated below.")
-                            for missing_field in remaining_data_to_collect:
-                                print("\t" + missing_field + " (Optional)")
-                        break
-                    else:
-                        print("ERROR: We just finishing reading the metadata section of the provided file, but we didn't find all the metadata which was specifically requested to be Required! :(")
-                        for missing_field in remaining_data_to_collect:
-                            required_or_optional = "Required" if remaining_data_to_collect[missing_field]["is_required"] else "Optional"
-                            print("\t" + missing_field + " (" + required_or_optional + ")")
-                        print("Please update either the file to include the missing Required metadata, or update which metadata should be Required, and then try running this script again.")
-                        quit()
         json_metadata_file.write("}")
+        if required_metadata_was_collected(remaining_data_to_collect):
+            if not silence_missing_optional_metadata_warning:
+                print("Warning: Although all the Required metadata was found, some Optional metadata was missing, indicated below.")
+                for missing_field in remaining_data_to_collect:
+                    print("\t" + missing_field + " (Optional)")
+        else:
+            failure_message = "Metadata Collection Failure,Missing Required Metadata: "
+            if not silence_error_logs:
+                print(f"ERROR: We just finishing reading the metadata section of a provided file, but we didn't find all the metadata which was specifically requested to be Required! :( Story File Name: {story_file_name}")
+            for missing_field in remaining_data_to_collect:
+                required_or_optional = "Required" if remaining_data_to_collect[missing_field]["is_required"] else "Optional"
+                if not silence_error_logs:
+                    print("\t" + missing_field + " (" + required_or_optional + ")")
+                if required_or_optional == "Required":
+                    failure_message += missing_field + ' '
+            if not silence_error_logs:
+                print("Please update either the file to include the missing Required metadata, or update which metadata should be Required, and then try running this script again.")
+            return ('', failure_message)
 
     if not silence_script_progression_logs:
         print("SUCCESSFULLY COLLECTED TXT STORY METADATA!")
-    return json_metadata_file_name
+    return (json_metadata_file_name, '')
 
 def upload_story_file_to_s3(story_file_name):
     try:
@@ -297,21 +308,24 @@ def upload_story_file_to_s3(story_file_name):
             if s3_upload_response and "VersionId" in s3_upload_response and s3_upload_response["VersionId"]:
                 if not silence_script_progression_logs:
                     print("S3 UPLOAD OF STORY FILE SUCCESSFUL!")
-                return s3_upload_response["VersionId"]
+                return (s3_upload_response["VersionId"], '')
             else:
-                print("ERROR: Failed processing as we did not get a successful response when trying to upload the story file to S3. Double-check S3 parameters provided to this script as well as the S3 bucket configurations on AWS. Also verify whether your terminal is configured with the AWS CLI.")
-                quit()
+                if not silence_error_logs:
+                    print("ERROR: Failed processing as we did not get a successful response when trying to upload the story file to S3. Double-check S3 parameters provided to this script as well as the S3 bucket configurations on AWS. Also verify whether your terminal is configured with the AWS CLI.")
+                return ('', 'S3 Upload Failure,No Exception Thrown. This may be a glitch on AWS side- please try again. If the problem persists then check S3 Bucket Configuration and/or See Script Logs.')
     except Exception as e:
-        print(e)
-        print("ERROR: Failed processing as there was an exception thrown when trying to upload the story file to S3. Double-check S3 parameters provided to this script as well as the S3 bucket configurations on AWS. Also verify whether your terminal is configured with the AWS CLI.")
-        quit()
+        if not silence_error_logs:
+            print(e)
+            print("ERROR: Failed processing as there was an exception thrown when trying to upload the story file to S3. Double-check S3 parameters provided to this script as well as the S3 bucket configurations on AWS. Also verify whether your terminal is configured with the AWS CLI.")
+        return ('', 'S3 Upload Failure,Exception Thrown. This likely indicates a misconfigured S3 Bucket or invalid S3 values in the upload_parameters.json. See Script Logs for more details.')
 
 def rollback_s3_upload_from_failed_elastic_search_upload(reason, story_file_name, s3_object_version_id):
-    print("ERROR: " + reason)
-    print("S3 UPLOAD ROLLBACK INITIATED: Even though there was not an issue with uploading the story file to S3, because there was an issue at a later step in this process, the file that was just uploaded to S3 is being deleted, to prevent unnecessary orphan/unreferenced/unsearchable S3 objects. Other S3 objects are NOT being deleted, nor any other versions of files by the same name as this one. Only one file- the specific file that was uploaded just now with this script right before the error issue above came up, is being deleted.")
+    if not silence_error_logs:
+        print("ERROR: " + reason)
+        print("S3 UPLOAD ROLLBACK INITIATED: Even though there was not an issue with uploading the story file to S3, because there was an issue at a later step in this process, the file that was just uploaded to S3 is being deleted, to prevent unnecessary orphan/unreferenced/unsearchable S3 objects. Other S3 objects are NOT being deleted, nor any other versions of files by the same name as this one. Only one file- the specific file that was uploaded just now with this script right before the error issue above came up, is being deleted.")
     s3.delete_object(Bucket=bucket_name, Key=story_file_name, VersionId=s3_object_version_id)
-    print("S3 UPLOAD ROLLBACK COMPLETED.")
-    quit()
+    if not silence_error_logs:
+        print("S3 UPLOAD ROLLBACK COMPLETED.")
 
 def upload_metadata_file_to_elastic_search(story_file_name, json_metadata_file_name, s3_object_version_id):
     elastic_search_upload_response = {}
@@ -325,42 +339,101 @@ def upload_metadata_file_to_elastic_search(story_file_name, json_metadata_file_n
             elastic_search_upload_response = es.index(index=index, doc_type="_doc", body=story_metadata)
             successful_elastic_search_upload = True if elastic_search_upload_response["result"] == "created" else False
     except Exception as e:
-        print(e)
+        if not silence_error_logs:
+            print(e)
         try:
             if elastic_search_upload_response and "id" in elastic_search_upload_response and elastic_search_upload_response["id"]:
                 es.delete(index=index, id=elastic_search_upload_response["_id"])
         except Exception as e:
-            print(e)
+            if not silence_error_logs:
+                print(e)
         finally:
             rollback_s3_upload_from_failed_elastic_search_upload("Failed processing as there was an exception thrown issue when trying to upload the file metadata to AWS ElasticSearch. Double-check elastic_search parameters provided to this script as well as the Elastic Search configurations on AWS.", story_file_name, s3_object_version_id)
+            return 'Elastic Search Upload Failure,Exception Thrown. This likely indicates a misconfigured Elastic Search cluster or invalid Elastic Search values in the upload_parameters.json. See Script Logs for more details.'
     if successful_elastic_search_upload:
         if not silence_script_progression_logs:
             print("ELASTIC SEARCH UPLOAD OF STORY METADATA SUCCESSFUL!")
+            return ''
     else:
         try:
             if elastic_search_upload_response and "id" in elastic_search_upload_response and elastic_search_upload_response["id"]:
                 es.delete(index=index, id=elastic_search_upload_response["_id"])
         except Exception as e:
-            print(e)
+            if not silence_error_logs:
+                print(e)
         finally:
-            rollback_s3_upload_from_failed_elastic_search_upload("While there was no exception thrown during the Elastic Search upload, the response received by them indicates that the metadata may not have been saved properly. Thus, this is considered to have been a Failed file processing. This may just be a minor glitch on AWS side- try rerunninng this script to see if this error persists. If it does, then double-check the elastic search configurations provided in the upload_parameters.json.", story_file_name, s3_object_version_id)
-    
+            rollback_s3_upload_from_failed_elastic_search_upload("While there was no exception thrown during the Elastic Search upload- the response received by them indicates that the metadata may not have been saved properly. Thus- this is considered to have been a Failed file processing. This may just be a minor glitch on AWS side- try rerunninng this script to see if this error persists. If so then double-check the elastic search configurations provided in the upload_parameters.json.", story_file_name, s3_object_version_id)
+            return 'Elastic Search Upload Failure,No Exception Thrown. This may be a glitch on AWS side- please try again. If the problem persists check Elastic Search Cluster Configuration and/or See Script Logs.'
 
 def process_and_upload_txt_story(story_file_name):
     if not silence_script_progression_logs:
         print(">>> STARTED PROCESSING TXT FILE: " + story_file_name)
-    json_metadata_file_name = process_txt_story_metadata(story_file_name)
-    s3_object_version_id = upload_story_file_to_s3(story_file_name)
-    upload_metadata_file_to_elastic_search(story_file_name, json_metadata_file_name, s3_object_version_id)
+    (json_metadata_file_name, metadata_failure_message) = process_txt_story_metadata(story_file_name)
+    if metadata_failure_message:
+        return metadata_failure_message
+    (s3_object_version_id, s3_failure_message) = upload_story_file_to_s3(story_file_name)
+    if s3_failure_message:
+        return s3_failure_message
+    elastic_search_failure_message = upload_metadata_file_to_elastic_search(story_file_name, json_metadata_file_name, s3_object_version_id)
+    if elastic_search_failure_message:
+        return elastic_search_failure_message
     if not silence_script_progression_logs:
         print(">>> SUCCESSFULLY PROCESSED TXT FILE: " + story_file_name)
+    return ''
    
-provided_file_path = sys.argv[1]
-provided_file_path_is_folder = os.path.isdir(provided_file_path)
-if provided_file_path_is_folder:
-    if not provided_file_path.endswith("\\"):
-        provided_file_path += "\\"
-    for file_name in glob.iglob(provided_file_path + '**/*.txt', recursive=True):
-        process_and_upload_txt_story(file_name)
+def process_and_upload_all_stories(provided_source_path, desired_name_for_results_file):
+    try:
+        with open(desired_name_for_results_file + ".csv", "w") as results_file:
+            results_file.write("Story_File_Name,Processing_Result,Failure_Type,Failure_Details")
+            provided_source_path_is_folder = os.path.isdir(provided_source_path)
+            if provided_source_path_is_folder:
+                if not provided_source_path.endswith("\\"):
+                    provided_source_path += "\\"
+                for file_name in glob.iglob(provided_source_path + '**/*.txt', recursive=True):
+                    if file_name.endswith('requirements.txt'):
+                        continue
+                    story_failure_reason = process_and_upload_txt_story(file_name)
+                    if story_failure_reason:
+                        results_file.write(f'\n{file_name},FAILURE,{story_failure_reason}')
+                    else:
+                        results_file.write(f'\n{file_name},SUCCESS,-')
+            else:
+                story_failure_reason = process_and_upload_txt_story(provided_source_path)
+                if story_failure_reason:
+                    results_file.write(f'\n{provided_source_path},FAILURE,{story_failure_reason}')
+                else:
+                    results_file.write(f'\n{provided_source_path},SUCCESS,-,-')
+    except PermissionError:
+        print("Unsilenceable Error: There was a Permission Error when trying to create or open the csv file that will be used to store the results of story processing. This can happen if you currently have the results file open and are trying to overwrite it while you have it open.")
+
+provided_source_path = ''
+desired_name_for_results_file = ''
+
+if sys.argv[1:]:
+    provided_source_path = sys.argv[1]
 else:
-    process_and_upload_txt_story(provided_file_path)
+    provided_source_path = '.\\'
+    if not silence_script_progression_logs:
+        print("Warning: No path was provided for this script to process files from. Falling back onto default behavior of processing all files in current directory.")
+
+if sys.argv[2:]:
+    desired_name_for_results_file = sys.argv[2]
+    if os.path.isfile(desired_name_for_results_file + ".csv"):
+        if "script" in upload_parameters and upload_parameters["script"] and "overwrite_results_file" in upload_parameters["script"] and upload_parameters["script"]["overwrite_results_file"]:
+            if not silence_script_progression_logs:
+                print("Warning: The desired results file name that was provided already exists. However, since the upload parameters for this script says to overwrite it, then we shall.")
+        else:
+            print("Unsilenceable Error: A results file with the desired name already exists! If you want to overwrite the existing results file, change the 'overwrite_results_file' property under 'script' in the upload_parameters.json to true, and then rerun this script. Alternatively, provide a unique file name for the results file when you run this script.")
+            quit()
+else:
+    desired_name_for_results_file = "story_upload_results"
+    if os.path.isfile(desired_name_for_results_file + ".csv"):
+        if "script" in upload_parameters and upload_parameters["script"] and "overwrite_results_file" in upload_parameters["script"] and upload_parameters["script"]["overwrite_results_file"]:
+            if not silence_script_progression_logs:
+                print("Warning: A desired name for results file was not provided, and a results file with the default name already exists! However, since the upload parameters for this script says to overwrite it, then we shall.")
+        else:
+            print("Unsilenceable Error: A desired name for results file was not provided, and a results file with the default name already exists! If you want to overwrite the existing results file, change the 'overwrite_results_file' property under 'script' in the upload_parameters.json to true, and then rerun this script. Alternatively, provide a unique file name for the results file when you run this script.")
+            quit()
+    
+
+process_and_upload_all_stories(provided_source_path, desired_name_for_results_file)
