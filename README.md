@@ -1,6 +1,6 @@
 # s3-and-elasticsearch-file-uploader
 
-This utility script is written in Python, making it cross-OS compatible. It will accept a story file, parse it for metadata, then upload the story file to S3 and the metadata to AWS Elastic Search. It ensures consistency between both, including rolling back in case of any issue.
+This utility script is written in Python, making it cross-OS compatible. It will accept a story file (.txt), parse it for metadata, then upload the story file to S3 and the metadata to AWS Elastic Search. It ensures consistency between both, including rolling back in case of any issue.
 
 1. Set up your local environment to be able to run this script.
     - Configure the AWS CLI on your local machine.
