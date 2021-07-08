@@ -1,6 +1,6 @@
 # s3-and-elasticsearch-file-uploader
 
-This utility script is written in Python, making it cross-OS compatible. It will accept a story file (.txt) OR path to a folder (ending in a trailing slash) to recursively process all story files inside (.txt).
+This utility script is written in Python, making it cross-OS compatible. It will accept a story file (.txt or .epub) OR path to a folder (ending in a trailing slash) to recursively process all story files inside.
 
 Processing a story file entails collecting the metadata, then uploading the story file to S3 and the metadata to AWS Elastic Search. It ensures consistency between both, including rolling back in case of any issue.
 
@@ -12,7 +12,7 @@ In the case of multi-file processing (such as pointing to a folder), any failed 
     - Download Python on your local machine.
         - For Windows: https://www.python.org/downloads/
         - IMPORTANT: DO check the box to add Python to PATH.
-                ![Alt text](check-add-to-path.jpg?raw=true "Optional Title")
+                ![Alt text](check-add-to-path.jpg?raw=true "Check 'Add Python to PATH' during Python Installation.")
     - Rename 'rename_me_to_upload_parameters.json' to 'upload_parameters.json'
         - This file will be read by the story uploader script to get important information about your AWS Account, and is excluded by the .gitignore file intentionally. After all, if you do save this to your own repo or push anywhere, you don't want to push your AWS account information.
 

@@ -1,6 +1,7 @@
 from elasticsearch import Elasticsearch, RequestsHttpConnection
 import json
 import boto3
+import epub_meta
 import sys
 import os
 import glob
@@ -77,8 +78,13 @@ expected_upload_parameters = {
 
 upload_parameters = {}
 
-with open('upload_parameters.json') as upload_parameters_file:
-    upload_parameters = json.load(upload_parameters_file)
+try:
+    with open('upload_parameters.json') as upload_parameters_file:
+        upload_parameters = json.load(upload_parameters_file)
+except Exception as e:
+    print(e)
+    print("Unsilenceable Error: The script was not able to find, open, or parse the required upload_parameters.json file in the same folder as where the script is located. This json is necessary as it provides the script with all the information it needs to successfully process and upload story files to AWS S3 and Elastic Search. If you know this file exists in the same folder as the script, then this issue could be caused by having the upload_parameters.json file open somewhere else (in which case, just close it, then try running this script again). If the file exists and you don't have it open, then another reason this can fail is if the json file is invalid. Double check that the json file is in valid json format.")
+    exit()
 
 tally_provided_uploaded_parameters(upload_parameters, expected_upload_parameters, '')
 validate_expected_upload_parameters_were_provided(expected_upload_parameters, '')
@@ -115,7 +121,7 @@ def transform_author(line):
 def transform_field(raw_field):
     return raw_field.replace(" ", "")
 
-transformers_for_expected_story_metadata = {
+transformers_for_expected_txt_story_metadata = {
     "Title": {
         "transformer": transform_title,
         "is_required": True,
@@ -202,6 +208,11 @@ transformers_for_expected_story_metadata = {
     }
 }
 
+expected_epub_story_metadata = {
+    "title": {"is_required": True},
+    "authors": {"is_required": True},
+}
+
 silence_script_progression_logs = False
 silence_missing_optional_metadata_warning = False
 silence_error_logs = False
@@ -239,6 +250,53 @@ def required_metadata_was_collected(metadata_dictionary):
             return False
     return True
 
+def some_optional_metadata_not_collected(metadata_dictionary):
+    return metadata_dictionary
+
+def process_epub_story_metadata(story_file_name):
+    if not silence_script_progression_logs:
+        print("COLLECTING EPUB STORY METADATA...")
+    try:
+        epub_metadata = epub_meta.get_epub_metadata(story_file_name)
+    except Exception as e:
+        if not silence_error_logs:
+            print(e)
+            print('ERROR: There was an issue trying to extract the metadata from the epub file. It may have an invalid format or an invalid file was passed.')
+        return ('', 'Metadata Collection Failure,.epub file may be corrupted or having an invalid format for metadata extraction.')
+    
+    remaining_data_to_collect = expected_epub_story_metadata.copy()
+    for metadata_name in epub_metadata:
+        if epub_metadata[metadata_name] and metadata_name in remaining_data_to_collect:
+            remaining_data_to_collect.pop(metadata_name)
+
+    if not required_metadata_was_collected(remaining_data_to_collect):
+        failure_message = "Metadata Collection Failure,Missing Required Metadata: "
+        if not silence_error_logs:
+            print(f"ERROR: We just finishing reading the metadata section of a provided file, but we didn't find all the metadata which was specifically requested to be Required! :( Story File Name: {story_file_name}")
+        for missing_field in remaining_data_to_collect:
+            required_or_optional = "Required" if remaining_data_to_collect[missing_field]["is_required"] else "Optional"
+            if not silence_error_logs:
+                print("\t" + missing_field + " (" + required_or_optional + ")")
+            if required_or_optional == "Required":
+                failure_message += missing_field + ' '
+        if not silence_error_logs:
+            print("Please update either the file to include the missing Required metadata, or update which metadata should be Required, and then try running this script again.")
+        return ('', failure_message)
+    
+    if some_optional_metadata_not_collected(remaining_data_to_collect):
+        if not silence_missing_optional_metadata_warning:
+            print("Warning: Although all the Required metadata was found, some Optional metadata was missing, indicated below.")
+            for missing_field in remaining_data_to_collect:
+                print("\t" + missing_field + " (Optional)")
+
+    json_metadata_file_name = story_file_name.rstrip(".epub") + ".json"
+    with open(json_metadata_file_name, "w") as outfile: 
+        json.dump(epub_metadata, outfile)
+
+    if not silence_script_progression_logs:
+        print("SUCCESSFULLY COLLECTED EPUB STORY METADATA!")
+    return (json_metadata_file_name, '')
+
 def process_txt_story_metadata(story_file_name):
     if not silence_script_progression_logs:
         print("COLLECTING TXT STORY METADATA...")
@@ -246,7 +304,7 @@ def process_txt_story_metadata(story_file_name):
     json_metadata_file_name = story_file_name.rstrip(".txt") + ".json"
     with open(story_file_name, "r") as file_to_transform, open(json_metadata_file_name, "w") as json_metadata_file:
         json_metadata_file.write('{')
-        remaining_data_to_collect = transformers_for_expected_story_metadata.copy()
+        remaining_data_to_collect = transformers_for_expected_txt_story_metadata.copy()
         for raw_line in file_to_transform.readlines():
             if raw_line == "\n":
                 continue
@@ -380,6 +438,22 @@ def process_and_upload_txt_story(story_file_name):
     if not silence_script_progression_logs:
         print(">>> SUCCESSFULLY PROCESSED TXT FILE: " + story_file_name)
     return ''
+
+def process_and_upload_epub_story(story_file_name):
+    if not silence_script_progression_logs:
+        print(">>> STARTED PROCESSING EPUB FILE: " + story_file_name)
+    (json_metadata_file_name, metadata_failure_message) = process_epub_story_metadata(story_file_name)
+    if metadata_failure_message:
+        return metadata_failure_message
+    (s3_object_version_id, s3_failure_message) = upload_story_file_to_s3(story_file_name)
+    if s3_failure_message:
+        return s3_failure_message
+    elastic_search_failure_message = upload_metadata_file_to_elastic_search(story_file_name, json_metadata_file_name, s3_object_version_id)
+    if elastic_search_failure_message:
+        return elastic_search_failure_message
+    if not silence_script_progression_logs:
+        print(">>> SUCCESSFULLY PROCESSED EPUB FILE: " + story_file_name)
+    return ''
    
 def process_and_upload_all_stories(provided_source_path, desired_name_for_results_file):
     try:
@@ -389,16 +463,27 @@ def process_and_upload_all_stories(provided_source_path, desired_name_for_result
             if provided_source_path_is_folder:
                 if not provided_source_path.endswith("\\"):
                     provided_source_path += "\\"
-                for file_name in glob.iglob(provided_source_path + '**/*.txt', recursive=True):
-                    if file_name.endswith('requirements.txt'):
+                for txt_file_name in glob.iglob(provided_source_path + '**/*.txt', recursive=True):
+                    if txt_file_name.endswith('requirements.txt'):
                         continue
-                    story_failure_reason = process_and_upload_txt_story(file_name)
+                    story_failure_reason = process_and_upload_txt_story(txt_file_name)
                     if story_failure_reason:
-                        results_file.write(f'\n{file_name},FAILURE,{story_failure_reason}')
+                        results_file.write(f'\n{txt_file_name},FAILURE,{story_failure_reason}')
                     else:
-                        results_file.write(f'\n{file_name},SUCCESS,-')
+                        results_file.write(f'\n{txt_file_name},SUCCESS,-')
+                for epub_file_name in glob.iglob(provided_source_path + '**/*.epub', recursive=True):
+                    story_failure_reason = process_and_upload_epub_story(epub_file_name)
+                    if story_failure_reason:
+                        results_file.write(f'\n{epub_file_name},FAILURE,{story_failure_reason}')
+                    else:
+                        results_file.write(f'\n{epub_file_name},SUCCESS,-')
             else:
-                story_failure_reason = process_and_upload_txt_story(provided_source_path)
+                story_failure_reason = ''
+                if provided_source_path.endswith(".txt"):
+                    story_failure_reason = process_and_upload_txt_story(provided_source_path)
+                elif provided_source_path.endswith(".epub"):
+                    story_failure_reason = process_and_upload_epub_story(provided_source_path)
+                
                 if story_failure_reason:
                     results_file.write(f'\n{provided_source_path},FAILURE,{story_failure_reason}')
                 else:
