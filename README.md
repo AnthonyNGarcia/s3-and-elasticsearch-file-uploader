@@ -35,8 +35,8 @@ In the case of multi-file processing (such as pointing to a folder), any failed 
             - Default Value: Current Folder (where the script is located)
             - Description: For the stories which should be processed (accepts files and folders- for folders, does all files inside)
         - 2: Desired CSV Results File Name
-            -Default Value: story_upload_results
-            -Description: For the results csv that will be generated.
+            - Default Value: story_upload_results
+            - Description: For the results csv that will be generated.
     - Example Script Usages:
         - To upload the sample file in this repository, with a default name for the results csv file:
         `python story_uploader.py sample_file_folder\totally wacky_sample-fileNAME.txt`
