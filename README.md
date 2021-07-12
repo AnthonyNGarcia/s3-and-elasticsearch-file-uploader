@@ -23,7 +23,7 @@ In the case of multi-file processing (such as pointing to a folder), any failed 
     - AWS Elastic Search Cluster
         - Create it using Master User/Master User password to authenticate
         - Provide the Master User in the 'upload_parameters.json'
-        - Provide the Master User in the 'upload_parameters.json'
+        - Provide the Master User Password in the 'upload_parameters.json'
         - Provide the Region in which you created this cluster in the 'upload_parameters.json'
         - Once the cluster is done provisioning, provide its Endpoint in the 'upload_parameters.json'
 
